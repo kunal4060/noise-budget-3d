@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOISE BUDGET 3D</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #05070a;
+    font-family: 'Courier New', monospace; }
+  #c { position: fixed; inset: 0; display: block; }
+  .hud { position: fixed; z-index: 10; color: #cfe3ee; pointer-events: none;
+    text-shadow: 0 0 6px rgba(0,0,0,0.9); }
+  #obj { top: 12px; left: 50%; transform: translateX(-50%); text-align: center; }
+  #obj .t { font-size: 15px; letter-spacing: 4px; color: #ffaa3c; }
+  #obj .s { font-size: 11px; letter-spacing: 2px; color: #7a8a99; margin-top: 4px; }
+  #cores { top: 12px; left: 14px; font-size: 13px; letter-spacing: 2px; }
+  #cores .got { color: #ffaa3c; }
+  #dist { top: 38px; left: 14px; font-size: 13px; letter-spacing: 2px; color: #7fd4e8; }
+  #gstate { top: 12px; right: 14px; text-align: right; font-size: 13px; letter-spacing: 2px; }
+  #gstate .st { font-size: 16px; font-weight: bold; letter-spacing: 3px; }
+  .st-patrol { color: #5ad06e; } .st-susp { color: #ffdd44; }
+  .st-inv { color: #ff9a3c; } .st-chase { color: #ff3b3b; }
+  #noise { bottom: 14px; left: 14px; font-size: 12px; letter-spacing: 2px; color: #8a99a8; }
+  #noise .bar { width: 180px; height: 8px; background: #1a222c; margin-top: 5px;
+    border: 1px solid #33404e; }
+  #noise .fill { height: 100%; width: 0%; background: #ffaa3c; transition: width 0.15s; }
+  #help { bottom: 14px; right: 14px; text-align: right; font-size: 11px;
+    letter-spacing: 1px; color: #5a6b7a; line-height: 1.7; }
+  .screen { position: fixed; inset: 0; z-index: 20; display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(3,5,8,0.88); color: #cfe3ee; text-align: center; }
+  .screen.on { display: flex; }
+  .screen h1 { font-size: 42px; letter-spacing: 10px; color: #ffaa3c; margin-bottom: 10px; }
+  .screen h2 { font-size: 15px; letter-spacing: 4px; color: #7fd4e8; margin-bottom: 24px; }
+  .screen p { font-size: 13px; line-height: 2; color: #9fb2c3; max-width: 560px;
+    padding: 0 24px; }
+  .screen .big { font-size: 20px; color: #ff3b3b; letter-spacing: 4px; margin: 14px 0; }
+  .screen .go { margin-top: 26px; font-size: 15px; letter-spacing: 3px; color: #ffaa3c;
+    animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+  .screen .stats { font-size: 13px; color: #7a8a99; line-height: 2; margin-top: 8px; }
+  kbd { border: 1px solid #4a5a6a; padding: 1px 7px; border-radius: 3px;
+    background: #141c24; color: #cfe3ee; font-family: inherit; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="hud" id="obj">
+  <div class="t">COLLECT CORES <span id="objn">0/3</span></div>
+  <div class="s" id="objs">FIND THE EXIT WHEN ALL CORES ARE HELD</div>
+</div>
+<div class="hud" id="cores">◇ ◇ ◇</div>
+<div class="hud" id="dist">◉ DISTRACTIONS ×3</div>
+<div class="hud" id="gstate">GUARD<br><span class="st st-patrol" id="gst">PATROL</span></div>
+<div class="hud" id="noise">NOISE<div class="bar"><div class="fill" id="nfill"></div></div></div>
+<div class="hud" id="help">
+  <kbd>WASD</kbd> move · <kbd>SHIFT</kbd> sneak (quiet)<br>
+  <kbd>Q</kbd> place distraction · <kbd>R</kbd> retry
+</div>
+
+<div class="screen on" id="sTitle">
+  <h1>NOISE BUDGET</h1>
+  <h2>3D TOP-DOWN STEALTH</h2>
+  <p>One arena. Three data cores. One guard.<br><br>
+  <kbd>SHIFT</kbd> — sneak: slow, nearly silent.<br>
+  Walk normally and <span style="color:#ffaa3c">every step is heard</span>.<br>
+  <kbd>Q</kbd> — place a noisemaker (×3). It beeps. He investigates.<br><br>
+  The guard <b>patrols</b>, gets <b>suspicious</b>, <b>investigates</b> noises,<br>
+  then returns to patrol. If he <span style="color:#ff3b3b">sees you — run is over</span>.<br>
+  Watch the noise rings. Watch his state. Stay quiet.</p>
+  <div class="go">PRESS ENTER</div>
+</div>
+
+<div class="screen" id="sWin">
+  <h1 style="color:#5ad06e">EXTRACTED</h1>
+  <h2>ALL CORES SECURED — YOU WERE NEVER HERE</h2>
+  <div class="stats" id="winStats"></div>
+  <div class="go">ENTER — PLAY AGAIN</div>
+</div>
+
+<div class="screen" id="sLose">
+  <h1 style="color:#ff3b3b">CAUGHT</h1>
+  <div class="big" id="loseWhy">HE SAW YOU.</div>
+  <div class="stats" id="loseStats"></div>
+  <div class="go">ENTER — TRY AGAIN</div>
+</div>
+
+<script src="three.min.js"></script>
+<script>
+'use strict';
+/* ============================================================
+   NOISE BUDGET 3D — top-down stealth.
+   Collect 3 cores, dodge the guard, reach the exit.
+   Original code, built for the 3.2 Noise Budget statement.
+   ============================================================ */
+
+// ---------- map ----------
+const MAP = [
+  "###############",
+  "#P.....#......#",
+  "#.#####.#####.#",
+  "#.#...#.....#.#",
+  "#.#.#.#####.#.#",
+  "#...#.#...#...#",
+  "###.#.#.#.###.#",
+  "#...#...#.#...#",
+  "#.#####.#.#.###",
+  "#.....#.#.#...#",
+  "#####.#.#.###.#",
+  "#1....#.#...#.#",
+  "#.#####.###.#.#",
+  "#2..#..3.....E#",
+  "###############",
+];
+const W = 15, H = 15, TS = 4; // tile size world units
+
+// ---------- tuning ----------
+const TUNE = {
+  sneakSpd: 2.0, sneakNoise: 1.6,
+  walkSpd: 3.6, walkNoise: 4.2,
+  guardPatrol: 2.2, guardInv: 3.0, guardChase: 3.9,
+  hearBase: 7,            // guard hearing radius (tiles), reduced by walls
+  visionR: 5.5, visionA: 1.05, // radians (~60 deg half-angle)
+  catchD: 0.55,
+  distN: 3, distNoiseR: 6, distLife: 22, distBeep: 2.5,
+  invTime: 3.2,           // seconds guard searches a noise point
+};
+
+// ---------- state ----------
+const G = {
+  state: 'TITLE', // TITLE PLAY WIN LOSE
+  grid: [], cores: [], exit: null,
+  px: 1.5, py: 1.5, sneaking: false,
+  keys: 0, time: 0, noises: 0, distractions: [],
+  distLeft: TUNE.distN,
+  guard: null,
+};
+const PATROL = [[1,1],[13,1],[13,7],[9,11],[5,5],[1,11]];
+
+function parseMap() {
+  G.grid = []; G.cores = [];
+  for (let y = 0; y < H; y++) {
+    G.grid[y] = [];
+    for (let x = 0; x < W; x++) {
+      const ch = MAP[y][x];
+      G.grid[y][x] = (ch === '#') ? 1 : 0;
+      if (ch === 'P') { G.px = x + 0.5; G.py = y + 0.5; }
+      else if (ch === '1' || ch === '2' || ch === '3') G.cores.push({ x: x + 0.5, y: y + 0.5, got: false });
+      else if (ch === 'E') G.exit = { x: x + 0.5, y: y + 0.5 };
+    }
+  }
+  G.cores.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+}
+function isWall(x, y) {
+  x |= 0; y |= 0;
+  return x < 0 || y < 0 || x >= W || y >= H || G.grid[y][x] === 1;
+}
+
+// ---------- three.js ----------
+let scene, camera, renderer;
+let playerMesh, guardMesh, guardCone, guardLabel;
+let coreMeshes = [], exitMesh, exitLight;
+let rings = []; // noise rings {mesh, r, maxR, t}
+let wallMat, floorMat;
+
+function texFloor() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#232a33'; g.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 300; i++) {
+    g.fillStyle = Math.random() < 0.5 ? 'rgba(0,0,0,0.12)' : 'rgba(160,180,200,0.05)';
+    g.fillRect((Math.random() * 128) | 0, (Math.random() * 128) | 0, 2, 2);
+  }
+  g.strokeStyle = 'rgba(0,0,0,0.4)'; g.lineWidth = 2;
+  g.strokeRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+function buildWorld() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05070a);
+  scene.fog = new THREE.Fog(0x05070a, 30, 60);
+  camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 200);
+  renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+  scene.add(new THREE.AmbientLight(0x8a99b0, 0.55));
+  const dl = new THREE.DirectionalLight(0xbfd4e8, 0.7);
+  dl.position.set(10, 24, 6);
+  scene.add(dl);
+
+  floorMat = new THREE.MeshLambertMaterial({ map: texFloor() });
+  wallMat = new THREE.MeshLambertMaterial({ color: 0x3a4552 });
+
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W * TS, H * TS), floorMat);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(W * TS / 2, 0, H * TS / 2);
+  scene.add(floor);
+
+  const wallGeo = new THREE.BoxGeometry(TS, 2.2, TS);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (G.grid[y][x] !== 1) continue;
+    const m = new THREE.Mesh(wallGeo, wallMat);
+    m.position.set((x + 0.5) * TS, 1.1, (y + 0.5) * TS);
+    scene.add(m);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(TS, 0.12, TS),
+      new THREE.MeshLambertMaterial({ color: 0x4a586a }));
+    top.position.set((x + 0.5) * TS, 2.26, (y + 0.5) * TS);
+    scene.add(top);
+  }
+
+  // player: cyan capsule-ish
+  playerMesh = new THREE.Group();
+  const pb = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.65, 1.5, 12),
+    new THREE.MeshLambertMaterial({ color: 0x35d0e8 }));
+  pb.position.y = 0.75;
+  const ph = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 10),
+    new THREE.MeshLambertMaterial({ color: 0x9ae8f8 }));
+  ph.position.y = 1.75;
+  playerMesh.add(pb, ph);
+  scene.add(playerMesh);
+
+  // guard: red + vision cone + state label sprite
+  guardMesh = new THREE.Group();
+  const gb = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 1.7, 12),
+    new THREE.MeshLambertMaterial({ color: 0xd03a3a }));
+  gb.position.y = 0.85;
+  const gh = new THREE.Mesh(new THREE.SphereGeometry(0.45, 12, 10),
+    new THREE.MeshLambertMaterial({ color: 0xf08a8a }));
+  gh.position.y = 2.0;
+  guardMesh.add(gb, gh);
+  // vision cone (flat, on floor)
+  const coneGeo = new THREE.CircleGeometry(TUNE.visionR * TS, 24, -TUNE.visionA, TUNE.visionA * 2);
+  guardCone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({
+    color: 0xffdd44, transparent: true, opacity: 0.13, depthWrite: false }));
+  guardCone.rotation.x = -Math.PI / 2;
+  guardCone.position.y = 0.06;
+  guardMesh.add(guardCone);
+  scene.add(guardMesh);
+
+  // cores: amber octahedrons, bobbing
+  coreMeshes = [];
+  for (const co of G.cores) {
+    const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.7),
+      new THREE.MeshLambertMaterial({ color: 0xffaa3c, emissive: 0x7a4a00 }));
+    m.position.set(co.x * TS, 1.0, co.y * TS);
+    scene.add(m);
+    coreMeshes.push(m);
+  }
+
+  // exit: door frame + light (red locked / green open)
+  const ex = G.exit;
+  exitMesh = new THREE.Group();
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 0.5),
+    new THREE.MeshLambertMaterial({ color: 0x2a3440 }));
+  frame.position.y = 1.3;
+  exitLight = new THREE.PointLight(0xff3b3b, 1.2, 10);
+  exitLight.position.y = 2.2;
+  exitMesh.add(frame, exitLight);
+  exitMesh.position.set(ex.x * TS, 0, ex.y * TS);
+  scene.add(exitMesh);
+
+  // top-down camera, slight tilt
+  const cx = W * TS / 2, cz = H * TS / 2;
+  camera.position.set(cx, 34, cz + 10);
+  camera.lookAt(cx, 0, cz);
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+}
+
+// ---------- A* ----------
+function astar(sx, sy, tx, ty) {
+  sx |= 0; sy |= 0; tx |= 0; ty |= 0;
+  if (isWall(tx, ty)) return null;
+  const key = (x, y) => y * W + x;
+  const open = [{ x: sx, y: sy, g: 0, f: 0, p: null }];
+  const best = new Map([[key(sx, sy), 0]]);
+  const closed = new Set();
+  const h = (x, y) => Math.abs(x - tx) + Math.abs(y - ty);
+  while (open.length) {
+    let bi = 0;
+    for (let i = 1; i < open.length; i++) if (open[i].f < open[bi].f) bi = i;
+    const n = open.splice(bi, 1)[0];
+    if (n.x === tx && n.y === ty) {
+      const path = [];
+      let c = n;
+      while (c) { path.unshift([c.x, c.y]); c = c.p; }
+      return path;
+    }
+    closed.add(key(n.x, n.y));
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = n.x + dx, ny = n.y + dy;
+      if (isWall(nx, ny) || closed.has(key(nx, ny))) continue;
+      const g = n.g + 1;
+      if (best.has(key(nx, ny)) && best.get(key(nx, ny)) <= g) continue;
+      best.set(key(nx, ny), g);
+      open.push({ x: nx, y: ny, g, f: g + h(nx, ny), p: n });
+    }
+  }
+  return null;
+}
+function los(x0, y0, x1, y1) {
+  // grid LOS via sampling
+  const dx = x1 - x0, dy = y1 - y0;
+  const d = Math.hypot(dx, dy);
+  const steps = Math.ceil(d * 4);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    if (isWall(x0 + dx * t, y0 + dy * t)) return false;
+  }
+  return true;
+}
+
+// ---------- noise rings (show noise reach) ----------
+const ringGeo = new THREE.RingGeometry(0.96, 1.0, 40);
+function emitNoise(wx, wy, radiusTiles, color) {
+  const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+    color: color || 0xffaa3c, transparent: true, opacity: 0.85,
+    side: THREE.DoubleSide, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(wx, 0.08, wy);
+  scene.add(m);
+  rings.push({ m, r: 0.5, maxR: radiusTiles * TS, t: 0 });
+  G.noises++;
+}
+function tickRings(dt) {
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const r = rings[i];
+    r.t += dt;
+    r.r += dt * 9;
+    const s = r.r;
+    r.m.scale.set(s, s, 1);
+    r.m.material.opacity = Math.max(0, 0.85 * (1 - r.r / r.maxR));
+    if (r.r >= r.maxR) {
+      scene.remove(r.m);
+      r.m.geometry = ringGeo; // shared, don't dispose
+      r.m.material.dispose();
+      rings.splice(i, 1);
+    }
+  }
+}
+
+// ---------- guard FSM ----------
+// states: PATROL SUSPICIOUS INVESTIGATE CHASE
+function newGuard() {
+  // v1.1: spawn AWAY from player (player at 1,1) — start mid-patrol.
+  const sp = PATROL[2];
+  return {
+    x: sp[0] + 0.5, y: sp[1] + 0.5,
+    wp: 3, state: 'PATROL',
+    path: [], pathI: 0, speed: TUNE.guardPatrol,
+    dirA: 0, invT: 0, suspT: 0, searchA: 0,
+    lastSeen: null,
+  };
+}
+function guardHear(wx, wy, rTiles) {
+  const gd = G.guard;
+  // walls dampen: reduce radius if no LOS
+  let r = rTiles;
+  if (!los(gd.x, gd.y, wx / TS, wy / TS)) r *= 0.55;
+  const d = Math.hypot(gd.x - wx / TS, gd.y - wy / TS);
+  return d <= r;
+}
+function guardOnNoise(tx, ty) {
+  const gd = G.guard;
+  if (gd.state === 'CHASE') return;
+  if (gd.state === 'PATROL' || gd.state === 'SUSPICIOUS') {
+    gd.state = 'INVESTIGATE';
+    gd.invT = TUNE.invTime;
+    const p = astar(gd.x | 0, gd.y | 0, tx | 0, ty | 0);
+    gd.path = p || [[tx | 0, ty | 0]];
+    gd.pathI = 0;
+    gd.speed = TUNE.guardInv;
+    setGState();
+  } else if (gd.state === 'INVESTIGATE') {
+    // new noise redirects
+    const p = astar(gd.x | 0, gd.y | 0, tx | 0, ty | 0);
+    if (p) { gd.path = p; gd.pathI = 0; }
+    gd.invT = TUNE.invTime;
+  }
+}
+function setGState() {
+  const el = document.getElementById('gst');
+  const s = G.guard.state;
+  el.textContent = s;
+  el.className = 'st ' + (s === 'PATROL' ? 'st-patrol' : s === 'SUSPICIOUS' ? 'st-susp' : s === 'INVESTIGATE' ? 'st-inv' : 'st-chase');
+  guardCone.material.color.setHex(
+    s === 'PATROL' ? 0xffdd44 : s === 'SUSPICIOUS' ? 0xffdd44 : s === 'INVESTIGATE' ? 0xff9a3c : 0xff3b3b);
+}
+function tickGuard(dt) {
+  const gd = G.guard;
+  const px = G.px, py = G.py;
+
+  // --- vision: sees player in cone + LOS + range ---
+  const dx = px - gd.x, dy = py - gd.y;
+  const dist = Math.hypot(dx, dy);
+  let sees = false;
+  if (dist < TUNE.visionR) {
+    const angTo = Math.atan2(dy, dx);
+    let da = angTo - gd.dirA;
+    while (da > Math.PI) da -= Math.PI * 2;
+    while (da < -Math.PI) da += Math.PI * 2;
+    if (Math.abs(da) < TUNE.visionA && los(gd.x, gd.y, px, py)) sees = true;
+  }
+  if (sees && gd.state !== 'CHASE') {
+    gd.state = 'CHASE';
+    gd.lastSeen = { x: px, y: py };
+    setGState();
+  }
+
+  if (gd.state === 'PATROL') {
+    // walk waypoints
+    if (!gd.path.length || gd.pathI >= gd.path.length) {
+      const t = PATROL[gd.wp % PATROL.length];
+      const p = astar(gd.x | 0, gd.y | 0, t[0], t[1]);
+      gd.path = p || [[t[0], t[1]]];
+      gd.pathI = 0;
+      gd.wp++;
+    }
+    gd.speed = TUNE.guardPatrol;
+    moveAlong(dt, gd);
+  } else if (gd.state === 'SUSPICIOUS') {
+    gd.suspT -= dt;
+    gd.dirA += dt * 2.2; // look around
+    if (gd.suspT <= 0) { gd.state = 'PATROL'; gd.path = []; setGState(); }
+  } else if (gd.state === 'INVESTIGATE') {
+    if (gd.pathI < gd.path.length) {
+      moveAlong(dt, gd);
+    } else {
+      // arrived: search
+      gd.invT -= dt;
+      gd.dirA += dt * 3.0;
+      if (gd.invT <= 0) { gd.state = 'PATROL'; gd.path = []; setGState(); }
+    }
+  } else if (gd.state === 'CHASE') {
+    // chase last seen; re-path often
+    gd.speed = TUNE.guardChase;
+    gd._rp = (gd._rp || 0) - dt;
+    if (sees) { gd.lastSeen = { x: px, y: py }; gd._rp = 0; }
+    if (gd._rp <= 0) {
+      const t = gd.lastSeen || { x: px, y: py };
+      const p = astar(gd.x | 0, gd.y | 0, t.x | 0, t.y | 0);
+      gd.path = p || [];
+      gd.pathI = 0;
+      gd._rp = 0.4;
+    }
+    if (gd.pathI < gd.path.length) moveAlong(dt, gd);
+    else if (!sees) {
+      // lost him: suspicious, then patrol
+      gd.state = 'SUSPICIOUS'; gd.suspT = 2.5; setGState();
+    }
+  }
+
+  // catch?
+  if (Math.hypot(px - gd.x, py - gd.y) < TUNE.catchD) {
+    lose(sees ? 'HE SAW YOU.' : 'HE HEARD YOU.');
+  }
+
+  // meshes
+  guardMesh.position.set(gd.x * TS, 0, gd.y * TS);
+  guardCone.rotation.z = -gd.dirA; // circle geometry rotated flat; yaw via z
+}
+function moveAlong(dt, gd) {
+  if (gd.pathI >= gd.path.length) return;
+  const t = gd.path[gd.pathI];
+  const tx = t[0] + 0.5, ty = t[1] + 0.5;
+  const dx = tx - gd.x, dy = ty - gd.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 0.08) { gd.pathI++; return; }
+  gd.dirA = Math.atan2(dy, dx);
+  const step = Math.min(d, gd.speed * dt);
+  gd.x += (dx / d) * step;
+  gd.y += (dy / d) * step;
+}
+
+// ---------- input ----------
+const held = {};
+addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  held[e.code] = true;
+  if (e.code === 'Enter') {
+    if (G.state === 'TITLE') startGame();
+    else if (G.state === 'WIN' || G.state === 'LOSE') startGame();
+  }
+  if (e.code === 'KeyR' && (G.state === 'PLAY' || G.state === 'WIN' || G.state === 'LOSE')) startGame();
+  if (e.code === 'KeyQ' && G.state === 'PLAY') placeDistraction();
+});
+addEventListener('keyup', e => { held[e.code] = false; });
+
+function placeDistraction() {
+  if (G.distLeft <= 0) return;
+  const tx = Math.floor(G.px), ty = Math.floor(G.py);
+  if (isWall(tx, ty)) return;
+  G.distLeft--;
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8),
+    new THREE.MeshLambertMaterial({ color: 0x7fd4e8, emissive: 0x1a4a5a }));
+  m.position.set(G.px * TS, 0.4, G.py * TS);
+  scene.add(m);
+  G.distractions.push({ x: G.px, y: G.py, mesh: m, t: 0, life: TUNE.distLife });
+  document.getElementById('dist').textContent = '◉ DISTRACTIONS ×' + G.distLeft;
+  emitNoise(G.px * TS, G.py * TS, 2, 0x7fd4e8);
+}
+
+// ---------- HUD ----------
+function hud() {
+  document.getElementById('objn').textContent = G.keys + '/3';
+  document.getElementById('cores').innerHTML =
+    [0,1,2].map(i => '<span class="' + (i < G.keys ? 'got' : '') + '">◆</span>').join(' ');
+  document.getElementById('objs').textContent =
+    G.keys < 3 ? 'FIND THE EXIT WHEN ALL CORES ARE HELD' : 'EXIT OPEN — GO GO GO';
+  const nf = document.getElementById('nfill');
+  nf.style.width = Math.min(100, (G._noiseShow || 0) * 100) + '%';
+}
+
+// ---------- flow ----------
+function show(id) {
+  for (const s of ['sTitle','sWin','sLose']) document.getElementById(s).classList.toggle('on', s === id);
+}
+function startGame() {
+  parseMap();
+  G.state = 'PLAY';
+  G.keys = 0; G.time = 0; G.noises = 0; G.distLeft = TUNE.distN;
+  G.distractions = []; G._noiseShow = 0; G._stepT = 0;
+  G.guard = newGuard();
+  setGState();
+  // reset meshes
+  for (const m of coreMeshes) { m.visible = true; }
+  for (const d of (G._distMeshes || [])) scene.remove(d);
+  G._distMeshes = [];
+  for (const r of rings) { scene.remove(r.m); r.m.material.dispose(); }
+  rings = [];
+  document.getElementById('dist').textContent = '◉ DISTRACTIONS ×3';
+  exitLight.color.setHex(0xff3b3b);
+  show(null);
+  hud();
+}
+function win() {
+  G.state = 'WIN';
+  document.getElementById('winStats').innerHTML =
+    'TIME&nbsp;&nbsp;' + G.time.toFixed(1) + 's<br>NOISES MADE&nbsp;&nbsp;' + G.noises +
+    '<br>DISTRACTIONS USED&nbsp;&nbsp;' + (TUNE.distN - G.distLeft);
+  show('sWin');
+}
+function lose(why) {
+  if (G.state !== 'PLAY') return;
+  G.state = 'LOSE';
+  document.getElementById('loseWhy').textContent = why;
+  document.getElementById('loseStats').innerHTML =
+    'CORES&nbsp;&nbsp;' + G.keys + '/3<br>TIME SURVIVED&nbsp;&nbsp;' + G.time.toFixed(1) +
+    's<br>NOISES MADE&nbsp;&nbsp;' + G.noises;
+  show('sLose');
+}
+
+// ---------- main loop ----------
+let last = 0;
+function loop(t) {
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.05, (t - last) / 1000 || 0.016);
+  last = t;
+  if (G.state !== 'PLAY') { renderer.render(scene, camera); return; }
+  G.time += dt;
+
+  // player movement
+  let mx = 0, my = 0;
+  if (held['KeyW'] || held['ArrowUp']) my -= 1;
+  if (held['KeyS'] || held['ArrowDown']) my += 1;
+  if (held['KeyA'] || held['ArrowLeft']) mx -= 1;
+  if (held['KeyD'] || held['ArrowRight']) mx += 1;
+  G.sneaking = !!(held['ShiftLeft'] || held['ShiftRight']);
+  const spd = G.sneaking ? TUNE.sneakSpd : TUNE.walkSpd;
+  const nzR = G.sneaking ? TUNE.sneakNoise : TUNE.walkNoise;
+  G._noiseShow += ((mx || my ? (G.sneaking ? 0.25 : 1) : 0) - G._noiseShow) * 8 * dt;
+  if (mx || my) {
+    const l = Math.hypot(mx, my); mx /= l; my /= l;
+    const nx = G.px + mx * spd * dt, ny = G.py + my * spd * dt;
+    // axis-separated collision
+    if (!isWall(nx, G.py)) G.px = nx;
+    if (!isWall(G.px, ny)) G.py = ny;
+    // footstep noise rings
+    G._stepT -= dt;
+    if (G._stepT <= 0) {
+      G._stepT = G.sneaking ? 0.55 : 0.34;
+      emitNoise(G.px * TS, G.py * TS, nzR, G.sneaking ? 0x3a6a7a : 0xffaa3c);
+      if (guardHear(G.px * TS, G.py * TS, nzR)) guardOnNoise(G.px, G.py);
+    }
+  }
+  playerMesh.position.set(G.px * TS, 0, G.py * TS);
+  if (mx || my) playerMesh.rotation.y = Math.atan2(mx, -my);
+
+  // cores pickup
+  for (let i = 0; i < G.cores.length; i++) {
+    const co = G.cores[i];
+    if (!co.got && Math.hypot(G.px - co.x, G.py - co.y) < 0.7) {
+      co.got = true; G.keys++;
+      coreMeshes[i].visible = false;
+      emitNoise(co.x * TS, co.y * TS, 2, 0x5ad06e);
+      if (G.keys >= 3) exitLight.color.setHex(0x5ad06e);
+      hud();
+    }
+  }
+  // core bob
+  const bt = performance.now() / 400;
+  for (let i = 0; i < coreMeshes.length; i++) {
+    if (G.cores[i].got) continue;
+    coreMeshes[i].position.y = 1.0 + Math.sin(bt + i * 2) * 0.18;
+    coreMeshes[i].rotation.y += dt;
+  }
+
+  // distractions beep
+  for (let i = G.distractions.length - 1; i >= 0; i--) {
+    const d = G.distractions[i];
+    d.t += dt; d.life -= dt;
+    d.mesh.material.emissive.setHex(Math.sin(d.t * 10) > 0 ? 0x2a7a9a : 0x1a4a5a);
+    d._bt = (d._bt || 0) - dt;
+    if (d._bt <= 0 && d.life > 0) {
+      d._bt = TUNE.distBeep;
+      emitNoise(d.x * TS, d.y * TS, TUNE.distNoiseR, 0x7fd4e8);
+      if (guardHear(d.x * TS, d.y * TS, TUNE.distNoiseR)) guardOnNoise(d.x, d.y);
+    }
+    if (d.life <= 0) {
+      scene.remove(d.mesh);
+      d.mesh.geometry.dispose(); d.mesh.material.dispose();
+      G.distractions.splice(i, 1);
+    }
+  }
+
+  // exit
+  if (G.keys >= 3 && Math.hypot(G.px - G.exit.x, G.py - G.exit.y) < 0.8) win();
+
+  tickGuard(dt);
+  tickRings(dt);
+  hud();
+  renderer.render(scene, camera);
+}
+
+// ---------- boot ----------
+parseMap();
+buildWorld();
+G.guard = newGuard();
+guardMesh.position.set(G.guard.x * TS, 0, G.guard.y * TS);
+setGState();
+show('sTitle');
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
